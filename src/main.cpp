@@ -43,6 +43,12 @@ float kd = 0.0;
 bool DONE = false;
 bool DONE2 = false;
 
+bool flag1 = false;
+bool flag2 = false;
+bool flag3 = false;
+bool flag4 = false;
+bool flag5 = false;
+
 
 Adafruit_NeoPixel NEO = Adafruit_NeoPixel(1, 38, NEO_GRB + NEO_KHZ800);
 
@@ -93,6 +99,92 @@ void setLEDS(bool led1, bool led2){
   digitalWrite(LED2, led2);
 }
 
+int switchValue(){
+  if (digitalRead(SW1) == HIGH && digitalRead(SW2) == LOW){
+    return 1;
+  } 
+  else if (digitalRead(SW2) == HIGH && digitalRead(SW1) == LOW){
+    return 2;
+  }
+  else if (digitalRead(SW1) == HIGH && digitalRead(SW2) == HIGH){
+    return 3;
+  }
+  else{
+    return 0;
+  }
+}
+
+void PIDCompute(){
+  static int last_error = 0;
+
+  int wsum = -10 * sensor_states[2] + -5 * sensor_states[3] + sensor_states[4] + 5 * sensor_states[5] + 10 * sensor_states[6];
+  int sum  = sensor_states[2] + sensor_states[3] + sensor_states[4] + sensor_states[5] + sensor_states[6];
+
+  int position = wsum / sum;
+
+  int error = position - 5;
+
+  int p = kp * (float)error;
+
+  static int i_error = i_error + error;
+
+  int i = ki * (float)i_error;
+
+  int d = kd * (float)(error - last_error);
+
+  int out = p + i + d;
+ 
+  last_error = error;
+
+  setMotorSpeed(150 - out, 150 + out);
+}
+
+void returnToSender(){
+  setMotorSpeed(-120, -120);
+  delay(200);
+  setMotorSpeed(125, -100);
+  delay(65);
+  motorBrake();
+}
+
+void roll(){
+  setMotorSpeed(20, 20);
+  delay(50);
+  setMotorSpeed(-70, 70);
+  delay(180);
+  setMotorSpeed(70, 70);
+  delay(350);
+  setMotorSpeed(-100, 100);
+}
+
+void dodge(){
+  setMotorSpeed(80, -80);
+  delay(140);
+  setMotorSpeed(45, 110);
+  delay(450);
+  setMotorSpeed(70, 110);
+  delay(120);
+  setMotorSpeed(-80, 80);
+  delay(180);
+  motorBrake();
+}
+
+void startFight(){
+  while (1){
+    setMotorSpeed(120, 120);
+    if (sensor_states[0] == HIGH || sensor_states[1] == HIGH){
+      motorBrake();
+      return;
+    }
+  }
+}
+
+void startTurn(){
+  setMotorSpeed(150, -150);
+  delay(200);
+  motorBrake();
+}
+
 
 void setup() {
   // put your setup code here, to run once:
@@ -135,69 +227,6 @@ void setup() {
   NEO.show();
 
 }
-
-int switchValue(){
-  if (digitalRead(SW1) == HIGH && digitalRead(SW2) == LOW){
-    return 1;
-  } 
-  else if (digitalRead(SW2) == HIGH && digitalRead(SW1) == LOW){
-    return 2;
-  }
-  else if (digitalRead(SW1) == HIGH && digitalRead(SW2) == HIGH){
-    return 3;
-  }
-  else{
-    return 0;
-  }
-}
-
-void PIDCompute(){
-  static int last_error = 0;
-
-  int wsum = -10 * sensor_states[2] + -5 * sensor_states[3] + sensor_states[4] + 5 * sensor_states[5] + 10 * sensor_states[6];
-  int sum  = sensor_states[2] + sensor_states[3] + sensor_states[4] + sensor_states[5] + sensor_states[6];
-
-  int position = wsum / sum;
-
-  int error = position - 5;
-
-  int p = kp * (float)error;
-
-  static int i_error = i_error + error;
-
-  int i = ki * (float)i_error;
-
-  int d = kd * (float)(error - last_error);
-
-  int out = p + i + d;
- 
-  last_error = error;
-
-  setMotorSpeed(150 - out, 150 + out);
-}
-
-void returnToSender(){
-  setMotorSpeed(-150, -150);
-  delay(400);
-  setMotorSpeed(150, -150);
-  delay(200);
-}
-
-void startFight(){
-  while (1){
-    setMotorSpeed(120, 120);
-    if (sensor_states[0] == HIGH || sensor_states[1] == HIGH){
-      motorBrake();
-      return;
-    }
-  }
-}
-
-void startTurn(){
-  setMotorSpeed(150, -150);
-  delay(200);
-  motorBrake();
-}
 void loop() {
   // put your main code here, to run repeatedly:
   if (digitalRead(GO) == HIGH){
@@ -208,14 +237,18 @@ void loop() {
     switch (switch_value){
       case 1: //Task 1
         /* code */
+        setNeoColor(88, 255, 127, MAX_BRIGHTNESS);
         break;
       case 2: //Task 2
         /* code */
+        setNeoColor(255, 0, 255, MAX_BRIGHTNESS);
         break;
       case 3: //Task 3
         /* code */
+        setNeoColor(0, 0, 255, MAX_BRIGHTNESS);
         break;
       default:
+        setNeoColor(127, 100, 200, MAX_BRIGHTNESS);
         break;
     }
 
