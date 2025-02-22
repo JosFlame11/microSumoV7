@@ -116,6 +116,7 @@ int switchValue(){
 
 void PIDCompute(float kp = 5.0, float ki = 0.0, float kd = 2.0, int max_speed = 150){
   static int last_error = 0;
+  static int i_error = 0;
 
   int wsum = -10 * sensor_states[2] + -5 * sensor_states[3] + 5 * sensor_states[4] + 10 * sensor_states[5];
   int sum  = sensor_states[2] + sensor_states[3] + sensor_states[4] + sensor_states[5];
@@ -126,7 +127,7 @@ void PIDCompute(float kp = 5.0, float ki = 0.0, float kd = 2.0, int max_speed = 
 
   int p = kp * (float)error;
 
-  static int i_error = i_error + error;
+  i_error = i_error + error;
 
   int i = ki * (float)i_error;
 
