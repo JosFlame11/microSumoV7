@@ -36,9 +36,9 @@ const int left_pwm_channel = 1;
 
 uint8_t switch_value = 0;
 
-float kp = 1.0;
-float ki = 0.0;
-float kd = 0.0; 
+// float kp = 1.0;
+// float ki = 0.0;
+// float kd = 0.0; 
 
 bool DONE = false;
 bool DONE2 = false;
@@ -114,15 +114,15 @@ int switchValue(){
   }
 }
 
-void PIDCompute(){
+void PIDCompute(float kp = 5.0, float ki = 0.0, float kd = 2.0, int max_speed = 150){
   static int last_error = 0;
 
-  int wsum = -10 * sensor_states[2] + -5 * sensor_states[3] + sensor_states[4] + 5 * sensor_states[5] + 10 * sensor_states[6];
-  int sum  = sensor_states[2] + sensor_states[3] + sensor_states[4] + sensor_states[5] + sensor_states[6];
+  int wsum = -10 * sensor_states[2] + -5 * sensor_states[3] + 5 * sensor_states[4] + 10 * sensor_states[5];
+  int sum  = sensor_states[2] + sensor_states[3] + sensor_states[4] + sensor_states[5];
 
   int position = wsum / sum;
 
-  int error = position - 5;
+  int error = 0 - position;
 
   int p = kp * (float)error;
 
@@ -133,10 +133,14 @@ void PIDCompute(){
   int d = kd * (float)(error - last_error);
 
   int out = p + i + d;
- 
+
   last_error = error;
 
-  setMotorSpeed(150 - out, 150 + out);
+  int PWML = constrain(max_speed - out, -255, 255);
+  int PWMR = constrain(max_speed + out, -255, 255);
+ 
+
+  setMotorSpeed(PWML, PWMR);
 }
 
 void returnToSender(){
@@ -171,9 +175,8 @@ void dodge(){
 
 void startFight(){
   while (1){
-    setMotorSpeed(120, 120);
+    setMotorSpeed(50, 50);
     if (sensor_states[0] == HIGH || sensor_states[1] == HIGH){
-      motorBrake();
       return;
     }
   }
