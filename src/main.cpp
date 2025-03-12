@@ -26,10 +26,10 @@
 #define GO 21
 #define RDY 18
 
-#define MAX_BRIGHTNESS 230
+#define MAX_BRIGHTNESS 50
 
 uint8_t sensor_states[7];
-const int freq = 30000;
+const int freq = 10000;
 const int resolution = 8;
 const int right_pwm_channel = 0;
 const int left_pwm_channel = 1;
@@ -54,6 +54,7 @@ Adafruit_NeoPixel NEO = Adafruit_NeoPixel(1, 38, NEO_GRB + NEO_KHZ800);
 
 hw_timer_t * sensor_timer = NULL;
 
+// @todo: check which sensors are actually used
 void IRAM_ATTR sensorTimerInterruption(){
   sensor_states[0] = digitalRead(SENSOR_PIN1);
   sensor_states[1] = digitalRead(SENSOR_PIN2);
@@ -235,6 +236,8 @@ void loop() {
   // put your main code here, to run repeatedly:
   if (digitalRead(GO) == HIGH){
     setNeoColor(0, 255, 0, MAX_BRIGHTNESS);
+    if (!(sensor_states[0] == HIGH) && !(sensor_states[1] == HIGH)) motorBrake();
+    
     setLEDS(HIGH, LOW);
 
     switch_value = switchValue();
@@ -256,13 +259,10 @@ void loop() {
         break;
     }
 
-    if (!(sensor_states[0] == HIGH) && !(sensor_states[1] == HIGH)) motorBrake();
-
-
   } else if (digitalRead(RDY) == HIGH){
+    motorBrake();
     setNeoColor(255, 0, 0, MAX_BRIGHTNESS);
     setLEDS(LOW, HIGH);
-    motorBrake();
   }
 }
 
