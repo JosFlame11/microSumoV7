@@ -1,5 +1,8 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
+#include <ESP32Servo.h>
+
+#include "PID.h"
 
 #define SW1 35
 #define SW2 37
@@ -7,13 +10,16 @@
 #define LED1 5
 #define LED2 8
 #define SERVO_PIN 17
-#define SENSOR_PIN1 11
-#define SENSOR_PIN2 9
-#define SENSOR_PIN3 10
-#define SENSOR_PIN4 7
-#define SENSOR_PIN5 6
-#define SENSOR_PIN6 4
-#define SENSOR_PIN7 3
+
+// rename this pins for better debugging
+#define SENSOR_PISO_IZQ 11 // piso
+#define SENSOR_LATERAL_IZQ 9
+#define SENSOR_FRONTAL_IZQ 10
+#define SENSOR_FRONTAL_DER 7
+#define SENSOR_LATERAL_DER 6
+#define SENSOR_PISO_DER 3 // piso
+
+#define MAX_SENSORS 6
 
 #define RIGHT_PWM_PIN 1
 #define RIGHT_DIR_PIN 12
@@ -26,19 +32,17 @@
 #define GO 21
 #define RDY 18
 
-#define MAX_BRIGHTNESS 50
 
-uint8_t sensor_states[7];
-const int freq = 10000;
-const int resolution = 8;
-const int right_pwm_channel = 0;
-const int left_pwm_channel = 1;
+uint8_t sensor_states[MAX_SENSORS];
+const int freq = 12000;
+const int resolution = 10;
+const int right_pwm_channel = 2;
+const int left_pwm_channel = 3;
+
+#define MAX_SPEED pow(2, resolution) - 1
 
 uint8_t switch_value = 0;
 
-// float kp = 1.0;
-// float ki = 0.0;
-// float kd = 0.0; 
 
 bool DONE = false;
 bool DONE2 = false;
@@ -51,21 +55,30 @@ bool flag5 = false;
 
 
 Adafruit_NeoPixel NEO = Adafruit_NeoPixel(1, 38, NEO_GRB + NEO_KHZ800);
+#define MAX_BRIGHTNESS 100
+// colors
+const uint32_t RED = NEO.Color(255, 0, 0);
+const uint32_t GREEN = NEO.Color(0, 255, 0);
+const uint32_t BLUE = NEO.Color(0, 0, 255);
+const uint32_t YELLOW = NEO.Color(255, 255, 0);
+const uint32_t CYAN = NEO.Color(0, 255, 255);
+const uint32_t MAGENTA = NEO.Color(255, 0, 255);
+
+Servo servoFlag;
+
+PID trackerPID(850.0, 0.0, 50.0, MAX_SPEED, -MAX_SPEED);
 
 hw_timer_t * sensor_timer = NULL;
 
 // @todo: check which sensors are actually used
 void IRAM_ATTR sensorTimerInterruption(){
-  sensor_states[0] = digitalRead(SENSOR_PIN1);
-  sensor_states[1] = digitalRead(SENSOR_PIN2);
-  sensor_states[2] = digitalRead(SENSOR_PIN3);
-  sensor_states[3] = digitalRead(SENSOR_PIN4);
-  sensor_states[4] = digitalRead(SENSOR_PIN5);
-  sensor_states[5] = digitalRead(SENSOR_PIN6);
-  sensor_states[6] = digitalRead(SENSOR_PIN7);
+  sensor_states[0] = analogRead(SENSOR_PISO_IZQ);
+  sensor_states[1] = analogRead(SENSOR_LATERAL_IZQ);
+  sensor_states[2] = analogRead(SENSOR_FRONTAL_IZQ);
+  sensor_states[3] = analogRead(SENSOR_FRONTAL_DER);
+  sensor_states[4] = analogRead(SENSOR_LATERAL_DER);
+  sensor_states[5] = analogRead(SENSOR_PISO_DER);
 }
-
-
 
 void setMotorSpeed(int lvel, int rvel){
   lvel = constrain(lvel, -255, 255);
@@ -74,7 +87,7 @@ void setMotorSpeed(int lvel, int rvel){
   digitalWrite(LEFT_DIS_PIN, LOW);
   digitalWrite(RIGHT_DIS_PIN, LOW);
 
-  (lvel >= 0) ? digitalWrite(LEFT_DIR_PIN, HIGH) : digitalWrite(LEFT_DIR_PIN, LOW);
+  (lvel <= 0) ? digitalWrite(LEFT_DIR_PIN, HIGH) : digitalWrite(LEFT_DIR_PIN, LOW);
   (rvel >= 0) ? digitalWrite(RIGHT_DIR_PIN, HIGH) : digitalWrite(RIGHT_DIR_PIN, LOW);
 
   ledcWrite(left_pwm_channel, abs(lvel));
@@ -89,9 +102,9 @@ void motorBrake(){
   ledcWrite(right_pwm_channel, 0);
 }
 
-void setNeoColor(int r, int g, int b, int brightness){
+void setNeoColor(uint32_t color, int brightness = MAX_BRIGHTNESS){
   NEO.setBrightness(brightness);
-  NEO.setPixelColor(0, NEO.Color(r, g, b));
+  NEO.setPixelColor(0, color);
   NEO.show();
 }
 
@@ -101,56 +114,54 @@ void setLEDS(bool led1, bool led2){
 }
 
 int switchValue(){
-  if (digitalRead(SW1) == HIGH && digitalRead(SW2) == LOW){
-    return 1;
-  } 
-  else if (digitalRead(SW2) == HIGH && digitalRead(SW1) == LOW){
-    return 2;
-  }
-  else if (digitalRead(SW1) == HIGH && digitalRead(SW2) == HIGH){
-    return 3;
-  }
-  else{
-    return 0;
+  bool sw1 = digitalRead(SW1) == HIGH;
+  bool sw2 = digitalRead(SW2) == HIGH;
+  
+  return (sw1 ? 1 : 0) + (sw2 ? 2 : 0);
+}
+
+void statusLED(int option){
+  switch (option){
+    case 1:
+      setLEDS(HIGH, LOW);
+      break;
+    case 2:
+      setLEDS(LOW, HIGH);
+      break;
+    case 3:
+      setLEDS(HIGH, HIGH);
+      break;
+    default:
+      setLEDS(LOW, LOW);
+      break;
   }
 }
 
-void PIDCompute(float kp = 5.0, float ki = 0.0, float kd = 2.0, int max_speed = 150){
-  static int last_error = 0;
-  static int i_error = 0;
+void tracker(int base_speed){
+  static int position = 0;
+  // calculate the position based on the sensor states
+  int weighted_sum = (2) * sensor_states[1] + (1) * sensor_states[2] + (-1) * sensor_states[3] + (-2) * sensor_states[4];
+  int sensor_sum = sensor_states[1] + sensor_states[2] + sensor_states[3] + sensor_states[4];
+  // check if the sensor sum is 0 to avoid division by zero
+  if (sensor_sum != 0) position = weighted_sum / sensor_sum;
 
-  int wsum = -10 * sensor_states[2] + -5 * sensor_states[3] + 5 * sensor_states[4] + 10 * sensor_states[5];
-  int sum  = sensor_states[2] + sensor_states[3] + sensor_states[4] + sensor_states[5];
+  int output = trackerPID.compute(0, position);
 
-  int position = wsum / sum;
+  int left_speed = base_speed + output;
+  int right_speed = base_speed - output;
 
-  int error = 0 - position;
+  left_speed = constrain(left_speed, -MAX_SPEED, MAX_SPEED);
+  right_speed = constrain(right_speed, -MAX_SPEED, MAX_SPEED);
 
-  int p = kp * (float)error;
-
-  i_error = i_error + error;
-
-  int i = ki * (float)i_error;
-
-  int d = kd * (float)(error - last_error);
-
-  int out = p + i + d;
-
-  last_error = error;
-
-  int PWML = constrain(max_speed - out, -255, 255);
-  int PWMR = constrain(max_speed + out, -255, 255);
- 
-
-  setMotorSpeed(PWML, PWMR);
+  setMotorSpeed(left_speed, right_speed);
 }
+
 
 void returnToSender(){
-  setMotorSpeed(-120, -120);
-  delay(200);
-  setMotorSpeed(125, -100);
-  delay(65);
-  motorBrake();
+  setMotorSpeed(-550, -550);
+  delay(350);
+  setMotorSpeed(875, -875); // This is the perfect amount of power and time to make a 180
+  delay(295);
 }
 
 void roll(){
@@ -164,21 +175,17 @@ void roll(){
 }
 
 void dodge(){
-  setMotorSpeed(80, -80);
-  delay(140);
-  setMotorSpeed(45, 110);
-  delay(450);
-  setMotorSpeed(70, 110);
-  delay(120);
-  setMotorSpeed(-80, 80);
-  delay(180);
-  motorBrake();
+  setMotorSpeed(875, -875);
+  delay(int(115));
+  setMotorSpeed(735, 735);
+  delay(int(400));
 }
 
-void startFight(){
-  while (1){
-    setMotorSpeed(50, 50);
-    if (sensor_states[0] == HIGH || sensor_states[1] == HIGH){
+void startFight(bool flag){
+  while (1 && !flag){
+    setMotorSpeed(435, 435);
+    if (sensor_states[0] == HIGH || sensor_states[5] == HIGH){
+      DONE = true;
       return;
     }
   }
@@ -190,8 +197,8 @@ void startTurn(){
   motorBrake();
 }
 
-
 void setup() {
+  Serial.begin(9600);
   // put your setup code here, to run once:
   sensor_timer = timerBegin(3, 80, true);
   timerAttachInterrupt(sensor_timer, &sensorTimerInterruption, true);
@@ -205,13 +212,13 @@ void setup() {
   pinMode(LED2, OUTPUT);
 
   pinMode(SERVO_PIN, OUTPUT);
-  pinMode(SENSOR_PIN1, INPUT);
-  pinMode(SENSOR_PIN2, INPUT);
-  pinMode(SENSOR_PIN3, INPUT);
-  pinMode(SENSOR_PIN4, INPUT);
-  pinMode(SENSOR_PIN5, INPUT);
-  pinMode(SENSOR_PIN6, INPUT);
-  pinMode(SENSOR_PIN7, INPUT);
+  pinMode(SENSOR_PISO_IZQ, INPUT);
+  pinMode(SENSOR_LATERAL_IZQ, INPUT);
+  pinMode(SENSOR_FRONTAL_IZQ, INPUT);
+  pinMode(SENSOR_FRONTAL_DER, INPUT);
+  pinMode(SENSOR_LATERAL_DER, INPUT);
+  pinMode(SENSOR_PISO_DER, INPUT);
+  // pinMode(SENSOR_PIN6, INPUT);
 
   pinMode(RIGHT_PWM_PIN, OUTPUT);
   pinMode(RIGHT_DIR_PIN, OUTPUT);
@@ -227,42 +234,56 @@ void setup() {
   ledcSetup(left_pwm_channel, freq, resolution);
   ledcAttachPin(LEFT_PWM_PIN, left_pwm_channel);
 
+  servoFlag.attach(SERVO_PIN);
+  servoFlag.write(0);
+
+
   NEO.begin();
   NEO.setBrightness(255);
   NEO.show();
 
+  // delay(1500);
+  // // returnToSender();
+  // dodge();
+  // setNeoColor(MAGENTA, MAX_BRIGHTNESS);
+  // motorBrake();
+
+
 }
 void loop() {
-  // put your main code here, to run repeatedly:
-  if (digitalRead(GO) == HIGH){
-    setNeoColor(0, 255, 0, MAX_BRIGHTNESS);
-    if (!(sensor_states[0] == HIGH) && !(sensor_states[1] == HIGH)) motorBrake();
-    
-    setLEDS(HIGH, LOW);
-
+  int base_speed;
+  if (digitalRead(GO) == HIGH){ 
+    if (!(sensor_states[0] == HIGH) && !(sensor_states[5] == HIGH)) returnToSender(); // check if the robot is on the line
+    startFight(DONE);
     switch_value = switchValue();
+    statusLED(switch_value);
     switch (switch_value){
-      case 1: //Task 1
-        /* code */
-        setNeoColor(88, 255, 127, MAX_BRIGHTNESS);
+      case 1: // First strategy, based velocity is low
+      setNeoColor(BLUE, MAX_BRIGHTNESS);
+        base_speed = 535;
+        tracker(base_speed);
         break;
-      case 2: //Task 2
-        /* code */
-        setNeoColor(255, 0, 255, MAX_BRIGHTNESS);
+      case 2: // Second strategy, based velocity is high
+        setNeoColor(GREEN, MAX_BRIGHTNESS);
+        base_speed = 800;
+        tracker(base_speed);
         break;
-      case 3: //Task 3
-        /* code */
-        setNeoColor(0, 0, 255, MAX_BRIGHTNESS);
+      case 3: // Third strategy, when robots face each other
+        setNeoColor(YELLOW, MAX_BRIGHTNESS);
+        base_speed = 700;
+        if (!flag1) dodge();
+        flag1 = true;
+        tracker(base_speed);
         break;
       default:
-        setNeoColor(127, 100, 200, MAX_BRIGHTNESS);
+        
         break;
     }
 
   } else if (digitalRead(RDY) == HIGH){
+    DONE = false;
+    setNeoColor(RED, MAX_BRIGHTNESS);
     motorBrake();
-    setNeoColor(255, 0, 0, MAX_BRIGHTNESS);
-    setLEDS(LOW, HIGH);
   }
 }
 
